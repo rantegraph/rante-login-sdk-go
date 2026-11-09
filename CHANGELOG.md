@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 (2026-11-09)
+
+- **New module path:** the repository moved to the rantegraph organization on GitHub, so the module is now
+  `github.com/rantegraph/rante-login-sdk-go` (it was `github.com/rante-corporation/rante-login-sdk-go`). Update your
+  import paths; `go get github.com/rantegraph/rante-login-sdk-go@v1.0.1`. No code changes.
+- **Example:** the website creates its own account on a person's first sign-in and finds it by `sub` afterwards.
+
 ## 1.0.0 (2026-11-09)
 
 First release.
