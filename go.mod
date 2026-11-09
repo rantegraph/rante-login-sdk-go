@@ -1,4 +1,4 @@
-module github.com/rante-corporation/rante-login-sdk-go
+module github.com/rantegraph/rante-login-sdk-go
 
 go 1.26.0
 

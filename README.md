@@ -7,7 +7,7 @@
 - validates the ID token before you trust who signed in;
 - calls the userinfo endpoint.
 
-It finishes sign-ins started by the [Rante Login browser SDK](https://github.com/rante-corporation/rante-login-sdk)
+It finishes sign-ins started by the [Rante Login browser SDK](https://github.com/rantegraph/rante-login-sdk)
 too, including FedCM sign-ins in Chrome and Edge.
 
 The SDK is a thin layer over three libraries:
@@ -21,7 +21,7 @@ It needs Go 1.26 or later.
 ## Install
 
 ```sh
-go get github.com/rante-corporation/rante-login-sdk-go
+go get github.com/rantegraph/rante-login-sdk-go
 ```
 
 The module is fetched from GitHub; there's no separate registry for Go.
@@ -51,7 +51,7 @@ The module is fetched from GitHub; there's no separate registry for Go.
 ## Sign people in
 
 ```go
-import rantelogin "github.com/rante-corporation/rante-login-sdk-go"
+import rantelogin "github.com/rantegraph/rante-login-sdk-go"
 
 pemBytes, _ := os.ReadFile("private.pem")
 key, err := rantelogin.ParseSigningKeyPEM(os.Getenv("RANTE_LOGIN_KEY_PREFIX"), pemBytes)

@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	rantelogin "github.com/rante-corporation/rante-login-sdk-go"
+	rantelogin "github.com/rantegraph/rante-login-sdk-go"
 )
 
 const (
