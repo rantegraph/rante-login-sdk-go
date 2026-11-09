@@ -60,7 +60,16 @@ type session struct {
 	accessToken string
 	method      string
 	signedInAt  time.Time
+	newAccount  bool
 	lastSeen    time.Time
+}
+
+// account is one account on this website. A person's first "Sign in with Rante" here is their sign-up: the account is
+// created from the claims they agreed to share, and every later sign-in finds it by sub. A real website keeps accounts
+// in its database; this example keeps them in memory, so they're gone when the server restarts.
+type account struct {
+	id, sub, name, email    string
+	createdAt, lastSignInAt time.Time
 }
 
 type app struct {
@@ -69,6 +78,7 @@ type app struct {
 	secureCookies bool
 	mu            sync.Mutex
 	sessions      map[string]*session
+	accounts      map[string]*account // by sub
 }
 
 func main() {
@@ -95,7 +105,8 @@ func main() {
 		log.Fatal(err)
 	}
 	redirect, _ := url.Parse(rante.RedirectURI())
-	a := &app{rante: rante, siteOrigin: redirect.Scheme + "://" + redirect.Host, secureCookies: redirect.Scheme == "https", sessions: map[string]*session{}}
+	a := &app{rante: rante, siteOrigin: redirect.Scheme + "://" + redirect.Host, secureCookies: redirect.Scheme == "https", sessions: map[string]*session{},
+		accounts: map[string]*account{}}
 	if slices.Contains([]string{"/", "/auth/rante/sign-in", "/auth/rante/fedcm", "/auth/sign-out", "/userinfo", "/signin.js", "/style.css"}, redirect.Path) {
 		log.Fatal("Give RANTE_LOGIN_REDIRECT_URI a path of its own, for example /auth/rante/callback.")
 	}
@@ -134,7 +145,8 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	s := a.session(w, r, true)
 	if s.claims != nil {
 		render(w, http.StatusOK, signedInPage, map[string]any{"Name": s.claims["name"], "Method": s.method,
-			"SignedInAt": s.signedInAt.UTC().Format(time.RFC3339), "Claims": rows(s.claims)})
+			"SignedInAt": s.signedInAt.UTC().Format(time.RFC3339), "Claims": rows(s.claims),
+			"Account": a.accountView(s.claims), "NewAccount": s.newAccount})
 		return
 	}
 	// FedCM hands the ID token to the page, so its nonce must be one the page can't choose: issue it here and keep it
@@ -263,16 +275,55 @@ func (a *app) signOut(w http.ResponseWriter, r *http.Request) {
 }
 
 // startSession gives the person who signed in a new session: its ID changes, so a session fixed before sign-in is
-// worthless.
+// worthless. The sign-in also creates or finds their account on this website.
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, claims map[string]any, accessToken, method string) {
 	a.mu.Lock()
 	if cookie, err := r.Cookie(sessionCookie); err == nil {
 		delete(a.sessions, cookie.Value)
 	}
+	created := a.registerOrFindLocked(claims)
 	id := randomToken()
-	a.sessions[id] = &session{claims: claims, accessToken: accessToken, method: method, signedInAt: time.Now(), lastSeen: time.Now()}
+	a.sessions[id] = &session{claims: claims, accessToken: accessToken, method: method, signedInAt: time.Now(),
+		newAccount: created, lastSeen: time.Now()}
 	a.mu.Unlock()
 	a.setSessionCookie(w, id)
+}
+
+// registerOrFindLocked creates the person's account on the first sign-in, or finds it by sub; true when it was created
+// now. The caller holds a.mu.
+func (a *app) registerOrFindLocked(claims map[string]any) bool {
+	sub, _ := claims["sub"].(string)
+	name, _ := claims["name"].(string)
+	email, _ := claims["email"].(string)
+	now := time.Now().UTC()
+	acct, found := a.accounts[sub]
+	if !found {
+		acct = &account{id: randomID(), sub: sub, createdAt: now}
+		a.accounts[sub] = acct
+	}
+	// Keep the details the person shares this time. Rante shares an email only once it's verified.
+	if name != "" {
+		acct.name = name
+	}
+	if email != "" {
+		acct.email = email
+	}
+	acct.lastSignInAt = now
+	return !found
+}
+
+// accountView copies the signed-in person's account for the page, or returns nil when it's gone (the example keeps
+// accounts in memory).
+func (a *app) accountView(claims map[string]any) map[string]string {
+	sub, _ := claims["sub"].(string)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	acct, found := a.accounts[sub]
+	if !found {
+		return nil
+	}
+	return map[string]string{"ID": acct.id, "Sub": acct.sub, "Name": acct.name, "Email": acct.email,
+		"Created": acct.createdAt.Format(time.RFC3339), "LastSignIn": acct.lastSignInAt.Format(time.RFC3339)}
 }
 
 func (a *app) session(w http.ResponseWriter, r *http.Request, create bool) *session {
@@ -366,6 +417,15 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(bytes)
 }
 
+// randomID is a random version 4 UUID.
+func randomID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
@@ -405,9 +465,24 @@ var (
 
 	signedInPage = page(`{{define "title"}}Signed in{{end}}{{define "body"}}
     <h1>Signed in{{with .Name}} as {{.}}{{end}}</h1>
+    <p>Signed in with: <strong>{{.Method}}</strong>, {{.SignedInAt}}</p>
+    <h2>Your account on this website</h2>
+    {{with .Account}}<p>{{if $.NewAccount}}Created at this sign-in from your Rante account: no separate sign-up form, and no
+       password for this website.{{else}}Welcome back: this sign-in found your account by its Rante ID.{{end}}</p>
+    <table><tbody>
+      <tr><th>Account ID</th><td>{{.ID}}</td></tr>
+      <tr><th>Linked Rante ID (<code>sub</code>)</th><td>{{.Sub}}</td></tr>
+      <tr><th>Name</th><td>{{with .Name}}{{.}}{{else}}not shared{{end}}</td></tr>
+      <tr><th>Email</th><td>{{with .Email}}{{.}}{{else}}not shared (Rante shares an email only once it's verified){{end}}</td></tr>
+      <tr><th>Created</th><td>{{.Created}}</td></tr>
+      <tr><th>Last sign-in</th><td>{{.LastSignIn}}</td></tr>
+    </tbody></table>
+    <p>This example keeps accounts in memory. A real website stores them in its database, keyed by <code>sub</code>.</p>
+    {{else}}<p>Not found: this example keeps accounts in memory, and the server has restarted since you signed in. Sign out
+       and in again.</p>{{end}}
+    <h2>ID token</h2>
     <p>This server validated the ID token below. Use <code>sub</code> as the person's ID on this website: it is
        pairwise, so other organizations' apps see a different value.</p>
-    <p>Signed in with: <strong>{{.Method}}</strong>, {{.SignedInAt}}</p>
     <table><tbody>{{range .Claims}}<tr><th><code>{{.Name}}</code></th><td>{{.Value}}</td></tr>{{end}}</tbody></table>
     <p><a href="/userinfo">Show userinfo</a></p>
     <form method="post" action="/auth/sign-out"><button type="submit">Sign out</button></form>{{end}}`)
